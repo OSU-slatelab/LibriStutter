@@ -1,0 +1,115 @@
+##########################################
+# Hyperparameters for LibriStutter recipe
+#
+# Authors
+#  * Peter Plantinga 2021
+##########################################
+
+seed: 1236
+__set_seed: !apply:torch.manual_seed [!ref <seed>]
+
+data_folder: !PLACEHOLDER
+output_folder: !ref results/<seed>
+save_folder: !ref <output_folder>/save
+train_log: !ref <output_folder>/train_log.txt
+stats_file: !ref <output_folder>/stats.txt
+
+train_manifest: ./train.json
+valid_manifest: ./valid.json
+test_manifest: ./test.json
+
+number_of_epochs: 30
+label_outputs: 6
+n_mels: 60
+learning_rate: 0.0001
+time_reduce: 3
+
+dataloader_opts:
+    batch_size: 4
+
+encoder: !new:speechbrain.nnet.RNN.LSTM
+    input_size: !ref <n_mels> * <time_reduce>
+    hidden_size: 200
+    num_layers: 2
+    dropout: 0.1
+    bidirectional: True
+
+phoneme_embedding: !new:speechbrain.nnet.embedding.Embedding
+    num_embeddings: 40
+    embedding_dim: 100
+
+phn2word_embedding: !new:speechbrain.nnet.RNN.LSTM
+    input_size: !ref <phoneme_embedding[embedding_dim]>
+    hidden_size: 100
+    bidirectional: True
+
+prediction_model: !new:speechbrain.nnet.RNN.AttentionalRNNDecoder
+    rnn_type: gru
+    attn_type: location
+    hidden_size: 100
+    attn_dim: 100
+    num_layers: 1
+    enc_dim: !ref <encoder[hidden_size]> * 2
+    input_size: !ref <phn2word_embedding[hidden_size]> * 2
+    kernel_size: 20
+    channels: 20
+
+# Output for existence
+existence_output: !new:speechbrain.nnet.linear.Linear
+    input_size: !ref <prediction_model[hidden_size]>
+    n_neurons: 1
+
+# Output for stutter
+stutter_output: !new:speechbrain.nnet.linear.Linear
+    input_size: !ref <prediction_model[hidden_size]>
+    n_neurons: !ref <label_outputs>
+
+log_softmax: !new:speechbrain.nnet.activations.Softmax
+    apply_log: True
+
+counter: !new:speechbrain.utils.epoch_loop.EpochCounter
+    limit: !ref <number_of_epochs>
+
+compute_feats: !new:speechbrain.lobes.features.Fbank
+    n_mels: !ref <n_mels>
+normalize: !new:speechbrain.processing.features.InputNormalization
+spec_augment: !new:speechbrain.lobes.augment.SpecAugment
+    n_freq_mask: 4
+    freq_mask_width: 5
+    time_mask: False
+    replace_with_zero: False
+
+modules:
+    encoder: !ref <encoder>
+    phoneme_embedding: !ref <phoneme_embedding>
+    phn2word_embedding: !ref <phn2word_embedding>
+    prediction_model: !ref <prediction_model>
+    existence_output: !ref <existence_output>
+    stutter_output: !ref <stutter_output>
+
+opt_class: !name:torch.optim.Adam
+    lr: !ref <learning_rate>
+
+lr_annealing: !new:speechbrain.nnet.schedulers.NewBobScheduler
+    initial_value: !ref <learning_rate>
+    improvement_threshold: 0.0025
+    annealing_factor: 0.8
+    patient: 0
+
+checkpointer: !new:speechbrain.utils.checkpoints.Checkpointer
+    checkpoints_dir: !ref <save_folder>
+    recoverables:
+        encoder: !ref <encoder>
+        phoneme_embedding: !ref <phoneme_embedding>
+        phn2word_embedding: !ref <phn2word_embedding>
+        prediction_model: !ref <prediction_model>
+        existence_output: !ref <existence_output>
+        stutter_output: !ref <stutter_output>
+        counter: !ref <counter>
+
+ctc_stats: !name:speechbrain.utils.metric_stats.MetricStats
+    metric: !name:speechbrain.nnet.losses.ctc_loss
+        reduction: batch
+
+train_logger: !new:speechbrain.utils.train_logger.FileTrainLogger
+    save_file: !ref <train_log>
